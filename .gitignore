@@ -26,6 +26,8 @@ gradle-wrapper.properties
 bin/
 gen/
 
+.env
+
 # Output
 /out
 
@@ -33,3 +35,6 @@ gen/
 *.log
 *.jks
 *.keystore
+
+# Claude
+CLAUDE.md
