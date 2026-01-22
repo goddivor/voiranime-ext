@@ -46,11 +46,63 @@ class VoirAnime : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
 
         private const val PREF_THUMBNAIL_QUALITY = "thumbnail_quality"
         private const val DEFAULT_THUMBNAIL_QUALITY = "193x278"
+
+        private const val PREF_PREFERRED_PLAYER = "preferred_player"
+        private const val DEFAULT_PREFERRED_PLAYER = "myTV"
+
+        private val PLAYER_ENTRIES = arrayOf(
+            "myTV (Vidmoly)",
+            "MOON (Filemoon)",
+            "VOE",
+            "Stape (StreamTape)",
+            "FHD1 (VK)",
+        )
+        private val PLAYER_VALUES = arrayOf(
+            "myTV",
+            "MOON",
+            "VOE",
+            "Stape",
+            "FHD1",
+        )
+
+        private const val PREF_PREFERRED_QUALITY = "preferred_quality"
+        private const val DEFAULT_PREFERRED_QUALITY = "1080"
+
+        private val QUALITY_ENTRIES = arrayOf(
+            "1080p",
+            "720p",
+            "480p",
+            "360p",
+        )
+        private val QUALITY_VALUES = arrayOf(
+            "1080",
+            "720",
+            "480",
+            "360",
+        )
     }
 
     // ============================== Settings ===============================
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
+        ListPreference(screen.context).apply {
+            key = PREF_PREFERRED_PLAYER
+            title = "Lecteur préféré"
+            entries = PLAYER_ENTRIES
+            entryValues = PLAYER_VALUES
+            setDefaultValue(DEFAULT_PREFERRED_PLAYER)
+            summary = "Le lecteur sélectionné sera affiché en premier dans la liste des sources vidéo.\n\nActuel: %s"
+        }.also { screen.addPreference(it) }
+
+        ListPreference(screen.context).apply {
+            key = PREF_PREFERRED_QUALITY
+            title = "Qualité préférée"
+            entries = QUALITY_ENTRIES
+            entryValues = QUALITY_VALUES
+            setDefaultValue(DEFAULT_PREFERRED_QUALITY)
+            summary = "La qualité sélectionnée sera priorisée quand elle est disponible.\n\nActuel: %s"
+        }.also { screen.addPreference(it) }
+
         ListPreference(screen.context).apply {
             key = PREF_THUMBNAIL_QUALITY
             title = "Qualité des thumbnails"
@@ -335,7 +387,26 @@ class VoirAnime : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
             }
         }
 
-        return videos
+        return sortVideosByPreference(videos)
+    }
+
+    private fun sortVideosByPreference(videos: List<Video>): List<Video> {
+        val preferredPlayer = preferences.getString(PREF_PREFERRED_PLAYER, DEFAULT_PREFERRED_PLAYER)!!
+        val preferredQuality = preferences.getString(PREF_PREFERRED_QUALITY, DEFAULT_PREFERRED_QUALITY)!!
+
+        return videos.sortedWith(
+            compareByDescending<Video> { video ->
+                // Priority 1: Preferred player + preferred quality
+                video.quality.contains(preferredPlayer, ignoreCase = true) &&
+                    video.quality.contains(preferredQuality, ignoreCase = true)
+            }.thenByDescending { video ->
+                // Priority 2: Preferred player (any quality)
+                video.quality.contains(preferredPlayer, ignoreCase = true)
+            }.thenByDescending { video ->
+                // Priority 3: Preferred quality (any player)
+                video.quality.contains(preferredQuality, ignoreCase = true)
+            },
+        )
     }
 
     /**
