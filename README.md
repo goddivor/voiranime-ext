@@ -22,6 +22,7 @@ This is an **Aniyomi extension** that provides access to [VoirAnime](https://v6.
 - ✅ **VF & VOSTFR** - Choose between French dubbed or subtitled versions
 - ✅ **Deep Link Support** - Open anime directly from browser links
 - ✅ **Customizable Thumbnails** - Adjust image quality to save bandwidth
+- ✅ **Preferred Player & Quality** - Set your favorite video player and quality for automatic sorting
 - ✅ **Latest Updates** - Stay up to date with new episodes
 
 ---
@@ -38,6 +39,9 @@ This is an **Aniyomi extension** that provides access to [VoirAnime](https://v6.
 
 ### Advanced Filtering
 <img src="screenshots/voiranime-filter-feature.jpeg" alt="Filter Feature" width="200">
+
+### Advanced Settings
+<img src="screenshots/voiranime-settings.png" alt="Settings Page" width="200">
 
 ### Anime Gallery
 <img src="screenshots/voiranime-in-gallery.jpeg" alt="Gallery View" width="200">
@@ -102,9 +106,32 @@ You can open anime directly from your browser:
 
 ## ⚙️ Configuration
 
-### Thumbnail Quality Settings
+Access settings via **Extension Settings** in Aniyomi.
 
-Customize image quality in **Extension Settings**:
+### Preferred Player
+
+Choose your favorite video player. Videos from this player will appear first in the list:
+
+- **myTV** (VidMoly) - Default
+- **MOON** (Filemoon)
+- **VOE**
+- **Stape** (StreamTape)
+- **FHD1** (VK)
+
+### Preferred Quality
+
+Select your preferred video quality. This quality will be prioritized when available:
+
+- **1080p** - Default
+- **720p**
+- **480p**
+- **360p**
+
+Videos are sorted by player preference first, then by quality preference.
+
+### Thumbnail Quality
+
+Customize image quality to balance visual experience and data usage:
 
 - **110x150** - Very Small (minimal data usage)
 - **125x180** - Small
@@ -113,8 +140,6 @@ Customize image quality in **Extension Settings**:
 - **350x476** - Medium High
 - **460x630** - Large
 - **Original** - Highest quality (highest data usage)
-
-Higher quality images consume more bandwidth but provide better visual experience.
 
 ---
 
