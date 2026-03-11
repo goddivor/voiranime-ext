@@ -2,6 +2,7 @@ package eu.kanade.tachiyomi.animeextension.fr.voiranime
 
 import android.app.Application
 import android.content.SharedPreferences
+import android.util.Log
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
@@ -11,12 +12,13 @@ import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
 import eu.kanade.tachiyomi.animesource.online.ParsedAnimeHttpSource
 import eu.kanade.tachiyomi.lib.filemoonextractor.FilemoonExtractor
+import eu.kanade.tachiyomi.lib.playlistutils.PlaylistUtils
 import eu.kanade.tachiyomi.lib.streamtapeextractor.StreamTapeExtractor
-import eu.kanade.tachiyomi.lib.vidmolyextractor.VidMolyExtractor
-import eu.kanade.tachiyomi.lib.vkextractor.VkExtractor
 import eu.kanade.tachiyomi.lib.voeextractor.VoeExtractor
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.util.asJsoup
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import okhttp3.Headers
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
@@ -42,6 +44,7 @@ class VoirAnime : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
     }
 
     companion object {
+        private const val TAG = "VoirAnime"
         const val PREFIX_SEARCH = "slug:"
 
         private const val PREF_THUMBNAIL_QUALITY = "thumbnail_quality"
@@ -335,28 +338,37 @@ class VoirAnime : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
 
     // ============================== Videos =================================
 
+    private val playlistUtils by lazy { PlaylistUtils(client) }
+
+    private val sourcesRegex = Regex("sources: (.*?]),")
+    private val fileRegex = Regex("""file:\s*'([^']+)'""")
+
     override fun videoListParse(response: Response): List<Video> {
         val document = response.asJsoup()
         val videos = mutableListOf<Video>()
 
-        // Initialize extractors for the 5 different players
-        val vidmolyExtractor = VidMolyExtractor(client, headers)
+        Log.d(TAG, "videoListParse: URL - ${response.request.url}")
+
+        // Initialize extractors
         val filemoonExtractor = FilemoonExtractor(client)
         val voeExtractor = VoeExtractor(client, headers)
         val streamtapeExtractor = StreamTapeExtractor(client)
-        val vkExtractor = VkExtractor(client, headers)
 
         // Extract video sources from JavaScript object 'thisChapterSources'
         val scriptContent = document.select("script:containsData(thisChapterSources)").firstOrNull()?.data()
 
+        Log.d(TAG, "videoListParse: scriptContent found = ${scriptContent != null}")
         if (scriptContent != null) {
-            // Extract iframe URLs from the thisChapterSources JavaScript object
-            extractIframeUrls(scriptContent).forEach { (playerName, iframeUrl) ->
+            val iframeUrls = extractIframeUrls(scriptContent)
+            Log.d(TAG, "videoListParse: Found ${iframeUrls.size} iframe URLs")
+
+            iframeUrls.forEach { (playerName, iframeUrl) ->
+                Log.d(TAG, "videoListParse: Processing player=$playerName, url=$iframeUrl")
                 try {
                     val extractedVideos = when {
-                        // LECTEUR myTV - Vidmoly
+                        // LECTEUR myTV - Vidmoly (manual extraction)
                         iframeUrl.contains("vidmoly") -> {
-                            vidmolyExtractor.videosFromUrl(iframeUrl, "$playerName: ")
+                            extractVidmolyVideos(iframeUrl, playerName)
                         }
                         // LECTEUR MOON - Filemoon (f16px)
                         iframeUrl.contains("f16px") || iframeUrl.contains("filemoon") -> {
@@ -370,24 +382,116 @@ class VoirAnime : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
                         iframeUrl.contains("streamtape") -> {
                             streamtapeExtractor.videosFromUrl(iframeUrl, "$playerName: ")
                         }
-                        // LECTEUR FHD1 - VK/Mail.ru
-                        iframeUrl.contains("vk.com") || iframeUrl.contains("vkvideo") || iframeUrl.contains("mail.ru") -> {
-                            vkExtractor.videosFromUrl(iframeUrl, "$playerName: ")
+                        // LECTEUR FHD1 - Mail.ru
+                        iframeUrl.contains("mail.ru") -> {
+                            extractMailRuVideos(iframeUrl, playerName)
+                        }
+                        // VK
+                        iframeUrl.contains("vk.com") || iframeUrl.contains("vkvideo") -> {
+                            emptyList() // VK not supported for now
                         }
                         else -> {
-                            // Unknown player, skip it
+                            Log.w(TAG, "videoListParse: No extractor for url=$iframeUrl")
                             emptyList()
                         }
                     }
+                    Log.d(TAG, "videoListParse: Extracted ${extractedVideos.size} videos from $playerName")
                     videos.addAll(extractedVideos)
                 } catch (e: Exception) {
-                    // Log error but don't add non-playable iframe URLs
-                    // The extractor failed, so skip this source
+                    Log.e(TAG, "videoListParse: Failed to extract from $playerName: ${e.message}", e)
                 }
             }
+        } else {
+            Log.w(TAG, "videoListParse: No script with thisChapterSources found!")
         }
 
+        Log.d(TAG, "videoListParse: Total videos found - ${videos.size}")
         return sortVideosByPreference(videos)
+    }
+
+    /**
+     * Manual VidMoly extraction to avoid issues with the shared extractor
+     * (which hardcodes vidmoly.to as Origin/Referer while URLs use vidmoly.biz)
+     */
+    private fun extractVidmolyVideos(url: String, playerName: String): List<Video> {
+        val host = url.toHttpUrl().host
+        val vidmolyHeaders = headers.newBuilder()
+            .set("Origin", "https://$host")
+            .set("Referer", "https://$host/")
+            .set("Sec-Fetch-Dest", "iframe")
+            .build()
+
+        val page = client.newCall(GET(url, vidmolyHeaders)).execute().body.string()
+        val sourcesBlock = sourcesRegex.find(page)?.groupValues?.get(1)
+        if (sourcesBlock == null) {
+            Log.w(TAG, "extractVidmolyVideos: No sources block found")
+            return emptyList()
+        }
+
+        val m3u8Urls = fileRegex.findAll(sourcesBlock).map { it.groupValues[1] }.toList()
+        Log.d(TAG, "extractVidmolyVideos: Found ${m3u8Urls.size} m3u8 URLs")
+
+        val hlsHeaders = headers.newBuilder()
+            .set("Origin", "https://$host")
+            .set("Referer", "https://$host/")
+            .build()
+
+        return m3u8Urls.flatMap { m3u8Url ->
+            playlistUtils.extractFromHls(
+                m3u8Url,
+                referer = "https://$host/",
+                videoNameGen = { quality -> "$playerName: VidMoly - $quality" },
+                masterHeaders = hlsHeaders,
+                videoHeaders = hlsHeaders,
+            )
+        }
+    }
+
+    /**
+     * Manual Mail.ru extraction via their meta API
+     * The VkExtractor doesn't work for mail.ru embeds (video URLs loaded via JS)
+     */
+    private fun extractMailRuVideos(url: String, playerName: String): List<Video> {
+        // Extract video ID from embed URL: https://my.mail.ru/video/embed/ID
+        val videoId = url.substringAfterLast("/")
+        Log.d(TAG, "extractMailRuVideos: videoId=$videoId")
+
+        val metaUrl = "https://my.mail.ru/+/video/meta/$videoId"
+        val metaHeaders = headers.newBuilder()
+            .set("Referer", "https://my.mail.ru/")
+            .build()
+
+        val metaResponse = client.newCall(GET(metaUrl, metaHeaders)).execute().body.string()
+        Log.d(TAG, "extractMailRuVideos: meta response length=${metaResponse.length}")
+
+        val metaData = json.decodeFromString<MailRuMeta>(metaResponse)
+        val videos = metaData.videos.map { video ->
+            val videoUrl = if (video.url.startsWith("//")) "https:${video.url}" else video.url
+            val videoHeaders = headers.newBuilder()
+                .set("Referer", "https://my.mail.ru/")
+                .build()
+            Video(videoUrl, "$playerName: Mail.ru ${video.key}", videoUrl, videoHeaders)
+        }
+        Log.d(TAG, "extractMailRuVideos: Found ${videos.size} videos")
+        return videos
+    }
+
+    @Serializable
+    data class MailRuMeta(
+        val videos: List<MailRuVideo> = emptyList(),
+    )
+
+    @Serializable
+    data class MailRuVideo(
+        val key: String,
+        val url: String,
+    )
+
+    private val json: Json by lazy {
+        Json {
+            ignoreUnknownKeys = true
+            isLenient = true
+        }
     }
 
     private fun sortVideosByPreference(videos: List<Video>): List<Video> {
@@ -419,10 +523,18 @@ class VoirAnime : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
         // Regex to match: "PLAYER_NAME":"<iframe src=\"URL\" ...>"
         val regex = """"(LECTEUR [^"]+)":"<iframe src=\\"([^"]+)\\\"""".toRegex()
 
-        regex.findAll(scriptContent).forEach { matchResult ->
+        val matches = regex.findAll(scriptContent).toList()
+        Log.d(TAG, "extractIframeUrls: Regex found ${matches.size} matches")
+
+        matches.forEach { matchResult ->
             val playerName = matchResult.groupValues[1]
             val iframeUrl = matchResult.groupValues[2].replace("\\/", "/")
+            Log.d(TAG, "extractIframeUrls: player=$playerName, url=$iframeUrl")
             results.add(Pair(playerName, iframeUrl))
+        }
+
+        if (results.isEmpty()) {
+            Log.w(TAG, "extractIframeUrls: No matches! Raw script (first 1000 chars): ${scriptContent.take(1000)}")
         }
 
         return results
