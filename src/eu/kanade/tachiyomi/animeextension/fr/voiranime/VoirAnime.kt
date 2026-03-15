@@ -35,8 +35,7 @@ class VoirAnime : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
     override val lang = "fr"
     override val supportsLatest = true
 
-    override fun headersBuilder(): Headers.Builder = Headers.Builder()
-        .add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    override fun headersBuilder(): Headers.Builder = super.headersBuilder()
         .add("Referer", baseUrl)
 
     private val preferences: SharedPreferences by lazy {
